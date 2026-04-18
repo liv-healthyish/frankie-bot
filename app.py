@@ -267,6 +267,7 @@ def get_thread_history(channel, thread_ts, bot_id):
 def handle_event(payload):
     global BOT_USER_ID
     event = payload.get("event", {})
+    event_type = event.get("type")
     event_id = payload.get("event_id")
 
     if event_id in processed_events:
@@ -274,9 +275,6 @@ def handle_event(payload):
     processed_events.add(event_id)
     if len(processed_events) > 500:
         processed_events.clear()
-
-    if event.get("type") != "message" or event.get("subtype"):
-        return
 
     if not BOT_USER_ID:
         try:
@@ -287,15 +285,27 @@ def handle_event(payload):
     if event.get("user") == BOT_USER_ID:
         return
 
-    channel = event.get("channel")
-    if channel != FRANKIE_CHANNEL:
-        return
-
-    text      = event.get("text", "").strip()
+    channel = event.get("channel", "")
+    text = event.get("text", "").strip()
     thread_ts = event.get("thread_ts") or event.get("ts")
-    msg_ts    = event.get("ts")
+    msg_ts = event.get("ts")
 
     if not text:
+        return
+
+    should_respond = False
+
+    if event_type == "app_mention":
+        # Tagged anywhere in Slack — always respond
+        should_respond = True
+        if BOT_USER_ID:
+            text = text.replace(f"<@{BOT_USER_ID}>", "").strip()
+    elif event_type == "message" and not event.get("subtype"):
+        # DMs or #frankie-ea — always respond
+        if channel.startswith("D") or channel == FRANKIE_CHANNEL:
+            should_respond = True
+
+    if not should_respond or not text:
         return
 
     history = None
