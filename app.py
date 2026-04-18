@@ -17,13 +17,37 @@ claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 MONDAY_API_TOKEN     = os.environ["MONDAY_API_TOKEN"]
-TRIGGER_SECRET       = os.environ.get("TRIGGER_SECRET", "")
 MONDAY_BOARD_ID      = "18387683486"
 FRANKIE_CHANNEL      = "C0ATM8717GT"
 LIV_USER_ID          = "U0783NKAJP8"
 BOT_USER_ID          = None
 
+WEEKLY_TRIGGER = "FRANKIE_WEEKLY_TRIGGER"
+EOD_TRIGGER    = "FRANKIE_EOD_TRIGGER"
+
 processed_events = set()
+
+WEEKLY_PROMPT = """It's Monday morning. Pull Liv's active tasks from Monday.com and write her weekly planning brief. Include:
+
+1. This week's focus — separate WBR tasks (quarterly-goal-linked) from ad-hoc. Monday = ad-hoc only. Tue–Thu = WBR. Friday = flexible.
+2. A time-blocked plan — max 2 hours focused work per day. Mornings = focus. List the 2–3 most important things per day.
+3. Four questions:
+   - What's the one thing this week that would make everything else easier?
+   - What are you most likely to avoid — and why?
+   - Any blockers I should know about?
+   - What does a great week look like for you?
+
+Be direct, warm, short. Like a brilliant friend, not a corporate assistant."""
+
+EOD_PROMPT = """It's end of day. Write Liv's EOD check-in. Pull her active tasks from Monday.com for context. Include:
+
+1. EOD check-in questions:
+   - What did you actually get done today?
+   - What's getting pushed — and to when?
+   - Anything you're avoiding that we should talk about?
+   - How are you feeling going into tomorrow?
+
+Be warm but honest. Celebrate real wins. Call out real avoidance gently. Never lecture. Short."""
 
 
 def verify_slack(req):
@@ -201,6 +225,7 @@ YOUR PERSONALITY
 - Direct. Warm. Occasionally funny. Short is better.
 - Push back when something doesn't add up. Say it once, kindly, then move on.
 - Celebrate real wins. Call out real avoidance. Never lecture.
+- Vary your openers and structure — don't sound like a template.
 
 HOW TO HANDLE REQUESTS
 — "What should I focus on?" → Pull tasks, apply day-of-week logic, respect 2-hr limit, separate WBR vs ad-hoc.
@@ -210,28 +235,6 @@ HOW TO HANDLE REQUESTS
 — Anything else → Use your judgment. You know her world.
 
 IMPORTANT: Always use the Monday tools to get real data — don't make up task names or statuses."""
-
-WEEKLY_PROMPT = """It's Monday morning. Pull Liv's active tasks from Monday.com and write her weekly planning brief. Include:
-
-1. This week's focus — separate WBR tasks (quarterly-goal-linked) from ad-hoc. Monday = ad-hoc only. Tue–Thu = WBR. Friday = flexible.
-2. A time-blocked plan — max 2 hours focused work per day. Mornings = focus. List the 2–3 most important things per day.
-3. Four questions:
-   - What's the one thing this week that would make everything else easier?
-   - What are you most likely to avoid — and why?
-   - Any blockers I should know about?
-   - What does a great week look like for you?
-
-Be direct, warm, short. Like a brilliant friend, not a corporate assistant."""
-
-EOD_PROMPT = """It's end of day. Write Liv's EOD check-in. Pull her active tasks from Monday.com for context. Include:
-
-1. EOD check-in questions:
-   - What did you actually get done today?
-   - What's getting pushed — and to when?
-   - Anything you're avoiding that we should talk about?
-   - How are you feeling going into tomorrow?
-
-Be warm but honest. Celebrate real wins. Call out real avoidance gently. Never lecture. Short."""
 
 
 def ask_frankie(user_message, thread_history=None):
@@ -287,6 +290,14 @@ def get_thread_history(channel, thread_ts, bot_id):
         return None
 
 
+def send_scheduled_dm(prompt):
+    reply = ask_frankie(prompt)
+    try:
+        slack.chat_postMessage(channel=LIV_USER_ID, text=reply)
+    except SlackApiError as e:
+        print(f"Slack DM error: {e}")
+
+
 def handle_event(payload):
     global BOT_USER_ID
     event = payload.get("event", {})
@@ -316,6 +327,14 @@ def handle_event(payload):
     if not text:
         return
 
+    # Scheduled trigger detection — DM Liv silently, no channel reply
+    if WEEKLY_TRIGGER in text:
+        threading.Thread(target=send_scheduled_dm, args=(WEEKLY_PROMPT,), daemon=True).start()
+        return
+    if EOD_TRIGGER in text:
+        threading.Thread(target=send_scheduled_dm, args=(EOD_PROMPT,), daemon=True).start()
+        return
+
     should_respond = False
 
     if event_type == "app_mention":
@@ -339,31 +358,6 @@ def handle_event(payload):
         slack.chat_postMessage(channel=channel, thread_ts=thread_ts, text=reply)
     except SlackApiError as e:
         print(f"Slack error: {e}")
-
-
-@app.route("/trigger", methods=["POST"])
-def trigger():
-    data = request.json or {}
-    if data.get("secret") != TRIGGER_SECRET:
-        return jsonify({"error": "unauthorized"}), 401
-
-    trigger_type = data.get("type")
-    if trigger_type == "weekly":
-        prompt = WEEKLY_PROMPT
-    elif trigger_type == "eod":
-        prompt = EOD_PROMPT
-    else:
-        return jsonify({"error": "unknown type"}), 400
-
-    def run():
-        reply = ask_frankie(prompt)
-        try:
-            slack.chat_postMessage(channel=LIV_USER_ID, text=reply)
-        except SlackApiError as e:
-            print(f"Slack error: {e}")
-
-    threading.Thread(target=run, daemon=True).start()
-    return jsonify({"ok": True})
 
 
 @app.route("/slack/events", methods=["POST"])
