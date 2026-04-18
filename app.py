@@ -246,7 +246,7 @@ def ask_frankie(user_message, thread_history=None):
     while True:
         response = claude.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=1024,
+            max_tokens=2048,
             system=FRANKIE_SYSTEM,
             tools=TOOLS,
             messages=messages,
